@@ -1,6 +1,7 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+import math
 import sys
 sys.path.append('..')
 
@@ -10,6 +11,7 @@ from time import perf_counter
 
 import torch
 import torch.nn.functional as F
+from torcheval.metrics.text import Perplexity
 import torch.nn as nn
 from mamba_lm import from_pretrained
 from mamba_lm import MambaLM, MambaLMConfig
@@ -87,6 +89,8 @@ def train(pretrained=False):
     learning_rate = 1e-3
     model_path = f'saves/model.pth'
     backup_path = f"saves/model-b.pth"
+    best_path = f"saves/model-best.pth"
+    log_path = f"saves/log.txt"
 
     # Usage of datasets' built in datasets
     dataset = datasets.load_dataset('wikitext', 'wikitext-2-v1')
@@ -130,7 +134,7 @@ def train(pretrained=False):
     if pretrained:
         model = from_pretrained('state-spaces/mamba-130m').to(device)
     else:
-        config = MambaLMConfig(d_model=16, n_layers=4, vocab_size=len(tokenizer.vocab))
+        config = MambaLMConfig(d_model=16, n_layers=32, dt_rank=2, d_conv=3, vocab_size=len(tokenizer.vocab))
         model = MambaLM(config).to(device)
 
     # Create optimizer and pass the model
@@ -172,10 +176,17 @@ def train(pretrained=False):
 
     # Get data and apply tokenizer to the dataset
     train_data = get_data(tokenized_dataset['train'], vocab, batch_size)
+    valid_data = get_data(tokenized_dataset['validation'], vocab, batch_size)
+    test_data = get_data(tokenized_dataset['test'], vocab, batch_size)
     print(f"Train data length before: {train_data.shape[-1]}")
-    
+    print(f"Valid data length before: {valid_data.shape[-1]}")
+    print(f"Test data length before: {test_data.shape[-1]}")
+    metric=Perplexity()
 
+    f = open(log_path,'w')
+    
     # Training loop
+    best_perplex = math.inf
     t0_start = perf_counter()
     for z in range(epoch, epochs):
         idx = 0
@@ -183,8 +194,8 @@ def train(pretrained=False):
         print(f"\n> Epoch {z+1}/{epochs}")
 
         t2_start = perf_counter()
-        for i in range(train_data.shape[-1]):   
-            model.train()
+        model.train()
+        for i in range(train_data.shape[-1]):
             t1_start = perf_counter()
 
             input, output = get_batch(train_data, seq_length, idx)
@@ -207,20 +218,9 @@ def train(pretrained=False):
 
                 t1_stop = perf_counter()
 
-                # Print the progress during training and save the model
+                # Print the progress during training
                 if i%10==0:
                     print(f"\r> Batch: {idx}/{train_data.shape[-1]-seq_length} loss: {avg_loss/(i+1):.5f} time: {t1_stop-t1_start:.2f} sec ", end="")
-
-                    checkpoint = {
-                        'epoch': z,
-                        'model_state': model.state_dict(),
-                        'optimizer_state': optim.state_dict(),
-                        'scheduler_state': scheduler.state_dict(),
-                    }
-                    # Create backup file
-                    if backup_path is not None and os.path.isfile(model_path):
-                        shutil.copyfile(model_path, backup_path)
-                    torch.save(checkpoint, model_path)
 
             # Increment idx
             idx += 1
@@ -228,10 +228,44 @@ def train(pretrained=False):
                 idx = 0
                 break
 
+        ## EVALUATION ##
+        model.eval()
+        for i in range(valid_data.shape[-1]):
+            if i % 400 == 0:
+                print(i, '/', valid_data.shape[-1])
+            input, output = get_batch(valid_data, seq_length, idx)
+            output = output.reshape(-1).unsqueeze(1)
+            input = input.to(device)
+            logits = model(input).reshape(output.shape[0],-1).unsqueeze(1).cpu()
+            metric.update(logits, output)
+
+        # Save the model
+        checkpoint = {
+            'epoch': z,
+            'model_state': model.state_dict(),
+            'optimizer_state': optim.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
+        }
+        # Create backup file
+        if backup_path is not None and os.path.isfile(model_path):
+            shutil.copyfile(model_path, backup_path)
+        torch.save(checkpoint, model_path)
+
+        perplex = metric.compute()
+        metric.reset()
+        if perplex <= best_perplex:
+            print(perplex)
+            print('Saving the best checkpoint...', file=f)
+            best_perplex = perplex
+            torch.save(checkpoint, best_path)
+        print('Current perplexity:', perplex, ', best perplexity:', best_perplex, file=f)
+            
         t2_stop = perf_counter()
-        print(f"\n> Epoch time: {t2_stop - t2_start:.3f} seconds")
+        print(f"\n> Epoch time: {t2_stop - t2_start:.3f} seconds at epoch {z+1}", file=f)
         # Update schedulers
         scheduler.step(avg_loss/(i+1))
+    f.close()
+
 
     t0_stop = perf_counter()
     print(f"\n> Finished training in: {t0_stop-t0_start} seconds")
@@ -257,7 +291,7 @@ def my_gen(pretrained=False):
     if pretrained:
         model = from_pretrained('state-spaces/mamba-130m').to(device)
     else:
-        config = MambaLMConfig(d_model=16, n_layers=4, vocab_size=len(tokenizer.vocab))
+        config = MambaLMConfig(d_model=16, n_layers=2, dt_rank=2, d_conv=3, vocab_size=len(tokenizer.vocab))
         model = MambaLM(config).to(device)
 
     # Load weights
