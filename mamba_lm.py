@@ -100,7 +100,7 @@ class MambaLM(nn.Module):
         self.norm_f = RMSNorm(self.config.d_model)
 
         self.lm_head = nn.Linear(self.config.d_model, self.lm_config.vocab_size, bias=False)
-        self.lm_head.weight = self.embedding.weight
+        # self.lm_head.weight = self.embedding.weight # do not initialize as such -> this will reduce performance
 
     def forward(self, tokens):
         # tokens : (B, L)
@@ -138,6 +138,15 @@ class MambaLM(nn.Module):
 
         input_ids = tokenizer(prompt, return_tensors='pt').input_ids.to(next(self.parameters()).device) # (1, num_tokens)
         input_ids = input_ids.repeat(batch_size, 1)
+        print(input_ids)
+        with torch.no_grad():
+            eval_logits = self.forward(input_ids)
+            eval_probs = F.softmax(eval_logits / temperature, dim=-1)
+            eval_next_token = torch.argmax(eval_probs, dim=-1)
+            print('Evaluation (scan):', torch.max(eval_probs, dim=-1))
+            eval_outputs = [tokenizer.decode(output.tolist()) for output in eval_next_token]
+            print('Eval output:', eval_outputs)
+        print('---------------------------------')
 
         # caches is a list of cache, one per layer
         # cache is composed of : the hidden state, and the last d_conv-1 inputs
@@ -165,6 +174,7 @@ class MambaLM(nn.Module):
                     next_token = torch.argmax(probs, dim=-1) # (batch_size)
 
                 input_ids = torch.cat([input_ids, next_token.unsqueeze(1)], dim=1)
+                print('Inference (recurrent):', torch.max(probs, dim=-1))
                 
         outputs = [tokenizer.decode(output.tolist()) for output in input_ids]
 

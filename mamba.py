@@ -128,7 +128,7 @@ class MambaBlock(nn.Module):
         self.conv1d = nn.Conv1d(in_channels=config.d_inner, out_channels=config.d_inner, 
                               kernel_size=config.d_conv, bias=config.conv_bias, 
                               groups=config.d_inner,
-                              padding=config.d_conv - 1)
+                              padding=config.d_conv-1)
         
         # projects x to input-dependent delta, B, C
         self.x_proj = nn.Linear(config.d_inner, config.dt_rank + 2 * config.d_state, bias=False)
