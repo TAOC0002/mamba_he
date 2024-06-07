@@ -134,7 +134,7 @@ def train(pretrained=False):
     if pretrained:
         model = from_pretrained('state-spaces/mamba-130m').to(device)
     else:
-        config = MambaLMConfig(d_model=16, n_layers=32, dt_rank=2, d_conv=3, vocab_size=len(tokenizer.vocab))
+        config = MambaLMConfig(d_model=16, n_layers=2, dt_rank=2, d_conv=4, vocab_size=len(tokenizer.vocab))
         model = MambaLM(config).to(device)
 
     # Create optimizer and pass the model
