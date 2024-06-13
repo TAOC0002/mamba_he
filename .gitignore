@@ -1,4 +1,5 @@
 __pycache__/
 **/*.npz
 old_tests/
-saves/
+files/
+saves*/

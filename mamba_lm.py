@@ -65,11 +65,11 @@ def from_pretrained(name: str):
                 
     def load_state_dict_hf(model_name):
         resolved_archive_file = cached_file(model_name, WEIGHTS_NAME, _raise_exceptions_for_missing_entries=False)
-        return torch.load(resolved_archive_file, weights_only=True, map_location='cpu', mmap=True)
+        return torch.load(resolved_archive_file, weights_only=True, map_location='cpu')
         
     # copy config data
     config_data = load_config_hf(name)
-    config = MambaLMConfig(d_model=config_data['d_model'], n_layers=config_data['n_layer'], vocab_size=config_data['vocab_size'])
+    config = MambaLMConfig(d_model=config_data['d_model'], n_layers=config_data['n_layer'], vocab_size=config_data['vocab_size'], d_state=16)
 
     model = MambaLM(config)
 
@@ -143,7 +143,6 @@ class MambaLM(nn.Module):
             eval_logits = self.forward(input_ids)
             eval_probs = F.softmax(eval_logits / temperature, dim=-1)
             eval_next_token = torch.argmax(eval_probs, dim=-1)
-            print('Evaluation (scan):', torch.max(eval_probs, dim=-1))
             eval_outputs = [tokenizer.decode(output.tolist()) for output in eval_next_token]
             print('Eval output:', eval_outputs)
         print('---------------------------------')
@@ -174,7 +173,6 @@ class MambaLM(nn.Module):
                     next_token = torch.argmax(probs, dim=-1) # (batch_size)
 
                 input_ids = torch.cat([input_ids, next_token.unsqueeze(1)], dim=1)
-                print('Inference (recurrent):', torch.max(probs, dim=-1))
                 
         outputs = [tokenizer.decode(output.tolist()) for output in input_ids]
 
