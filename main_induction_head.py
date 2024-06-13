@@ -2,11 +2,9 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
 sys.path.append('..')
-import shutil
 import torch
 import random
 import numpy as np
-import torch.nn.functional as F
 from random import choice, choices
 from mamba_lm import MambaLM, MambaLMConfig
 
