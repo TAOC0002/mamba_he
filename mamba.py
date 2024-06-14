@@ -19,6 +19,17 @@ We then multiply it by silu(z).
 See Figure 3 of the paper (page 8) for a visual representation of a MambaBlock.
 """
 
+def softplus(x):
+    # print('use approx softplus')
+    return 0.0625*x*x+0.5*x+1
+    return 0.082812671*x*x + 0.5*x + 0.75248
+
+def silu(x):
+    # print('use approx silu')
+    return 0.125*x*x+0.5*x+0.125
+    sigmoid = 0.500781 + 0.14670403*x + 0.001198*x*x - 0.001006*x*x*x
+    return x * sigmoid
+
 @dataclass
 class MambaConfig:
     d_model: int # D
@@ -30,14 +41,12 @@ class MambaConfig:
 
     dt_min: float = 0.001
     dt_max: float = 0.1
-    dt_init: str = "random" # "random" or "constant"
     dt_scale: float = 1.0
     dt_init_floor = 1e-4
 
     rms_norm_eps: float = 1e-5
     bias: bool = False
     conv_bias: bool = True
-    use_cuda: bool = False # use official CUDA implementation when training (not compatible with (b)float16)
 
     def __post_init__(self):
         self.d_inner = self.expand_factor * self.d_model # E*D = ED in comments
@@ -72,7 +81,8 @@ class ResidualBlock(nn.Module):
         # x : (B, L, D)
         # output : (B, L, D)
 
-        output = self.mixer(self.norm(x)) + x
+        # output = self.mixer(self.norm(x)) + x
+        output = self.mixer(x) + x
         return output
 
 class MambaBlock(nn.Module):
@@ -98,12 +108,7 @@ class MambaBlock(nn.Module):
         # dt initialization
         # dt weights
         dt_init_std = config.dt_rank**-0.5 * config.dt_scale
-        if config.dt_init == "constant":
-            nn.init.constant_(self.dt_proj.weight, dt_init_std)
-        elif config.dt_init == "random":
-            nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
-        else:
-            raise NotImplementedError
+        nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
         
         # delta bias
         dt = torch.exp(
@@ -123,14 +128,8 @@ class MambaBlock(nn.Module):
 
         # projects block output from ED back to D
         self.out_proj = nn.Linear(config.d_inner, config.d_model, bias=config.bias)
-
-        if self.config.use_cuda:
-            try:
-                from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-                self.selective_scan_cuda = selective_scan_fn
-            except ImportError:
-                print("Failed to import mamba_ssm. Falling back to mamba.py.")
-                self.config.use_cuda = False
+        self.softplus = softplus
+        self.silu = silu
 
     def forward(self, x):
         # x : (B, L, D)
@@ -146,15 +145,13 @@ class MambaBlock(nn.Module):
         x = self.conv1d(x)[:, :, :L] # depthwise convolution over time, with a short filter
         x = x.transpose(1, 2) # (B, L, ED)
 
-        x = F.silu(x)
+        # x = F.silu(x)
+        x = self.silu(x)
         y = self.ssm(x, z)
 
-        if self.config.use_cuda:
-            output = self.out_proj(y) # (B, L, D)
-            return output
-
         # z branch
-        z = F.silu(z)
+        # z = F.silu(z)
+        z = self.silu(z)
 
         output = y * z
         output = self.out_proj(output) # (B, L, D)
@@ -173,23 +170,11 @@ class MambaBlock(nn.Module):
         delta = self.dt_proj.weight @ delta.transpose(1, 2) # (ED, dt_rank) @ (B, L, dt_rank) -> (B, ED, L)
         # here we just apply the matrix mul operation of delta = softplus(dt_proj(delta))
         # the rest will be applied later (fused if using cuda)
-        
-        # choose which selective_scan function to use, according to config
-        if self.config.use_cuda:
-            # these are unfortunately needed for the selective_scan_cuda function
-            x = x.transpose(1, 2)
-            B = B.transpose(1, 2)
-            C = C.transpose(1, 2)
-            z = z.transpose(1, 2)
-
-            # "softplus" + "bias" + "y * silu(z)" operations are fused
-            y = self.selective_scan_cuda(x, delta, A, B, C, D, z=z, delta_softplus=True, delta_bias=self.dt_proj.bias.float())
-            y = y.transpose(1, 2) # (B, L, ED)
-        
-        else:
-            delta = delta.transpose(1, 2)
-            delta = F.softplus(delta + self.dt_proj.bias)
-            y = self.selective_scan(x, delta, A, B, C, D)
+                
+        delta = delta.transpose(1, 2)
+        # delta = F.softplus(delta + self.dt_proj.bias)
+        delta = self.softplus(delta + self.dt_proj.bias)
+        y = self.selective_scan(x, delta, A, B, C, D)
 
         return y
     

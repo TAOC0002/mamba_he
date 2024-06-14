@@ -5,6 +5,7 @@ sys.path.append('..')
 import torch
 import random
 import numpy as np
+from prettytable import PrettyTable
 from random import choice, choices
 from mamba_lm import MambaLM, MambaLMConfig
 
@@ -12,18 +13,18 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f"> Using {device} device")
 
 n_vocab = 16
-epochs = 5
+epochs = 4
 epoch_sz = 8192
 batch_size = 8
 seq_length = 256
 prefix_len = 10
-d_model=64
-d_state=16
-n_layers=2
-dt_rank=16
-d_conv=4
-report_every=100
-learning_rate=1e-3
+d_model = 32
+d_state = 16
+n_layers = 2
+dt_rank = 16
+d_conv = 4
+report_every = 100
+learning_rate = 1e-3
 model_path = f'saves/model.pth'
 
 class InductionData:
@@ -69,6 +70,7 @@ class InductionData:
             batch.append(self.gen())
         return torch.tensor(batch).to(device)
 
+
 def seed_everything(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -77,6 +79,7 @@ def seed_everything(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
+
 
 def load_checkpoint(filepath, model):
     print(f"> Loading model from: {filepath}")
@@ -90,6 +93,27 @@ def load_checkpoint(filepath, model):
     except Exception as e:
         print("> Cannot load model")
         return False, 0, model
+
+
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    embedding_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        params = parameter.numel()
+        table.add_row([name, params])
+        if "embedding" not in name:
+            total_params += params
+        else:
+            embedding_params += params
+    print(table)
+    print(f"Total Embeddings Params: {embedding_params}")
+    print(f"Total Trainable Params without embeddings: {total_params}")
+    print(f"Total Params: {total_params + embedding_params}")
+    return total_params
+
 
 def train():
     config = MambaLMConfig(d_model=d_model, n_layers=n_layers, dt_rank=dt_rank, d_conv=d_conv, d_state=d_state, vocab_size=n_vocab+1)
@@ -131,13 +155,15 @@ def train():
                 'model_state': model.state_dict()
             }
             torch.save(checkpoint, model_path)
-            break
+            # break
+
 
 def infer():
     criterion = torch.nn.CrossEntropyLoss()
     config = MambaLMConfig(d_model=d_model, n_layers=n_layers, dt_rank=dt_rank, d_conv=d_conv, d_state=d_state, vocab_size=n_vocab+1)
     model = MambaLM(config).to(device)
     isLoaded, _, model = load_checkpoint(f'saves/model.pth', model)
+    count_parameters(model)
     if (not isLoaded):
         return
     eval_data = InductionData(1, n_vocab, 128, prefix_len)
@@ -154,11 +180,13 @@ def infer():
     print('Input:', batch[:,:-1])
     print('Predicted output:', torch.argmax(out[:,-1,:], dim=-1))
 
+
 def prepare_folders():
     try:
         os.makedirs("./saves/")
     except:
         pass
+
 
 if __name__ == "__main__":
     seed_everything(534)

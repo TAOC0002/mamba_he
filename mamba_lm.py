@@ -38,7 +38,7 @@ class MambaLM(nn.Module):
 
         x = self.embedding(tokens)
 
-        x = self.mamba(x)
+        x = self.mamba(x) # to be converted into HE-friendly form
         x = self.norm_f(x)
 
         logits = self.lm_head(x)
