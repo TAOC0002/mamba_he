@@ -98,20 +98,20 @@ def load_checkpoint(filepath, model):
 def count_parameters(model):
     table = PrettyTable(["Modules", "Parameters"])
     total_params = 0
-    embedding_params = 0
+    misc_params = 0
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
             continue
         params = parameter.numel()
         table.add_row([name, params])
-        if "embedding" not in name:
+        if "embedding" not in name and "norm_f" not in name and "lm_head" not in name:
             total_params += params
         else:
-            embedding_params += params
+            misc_params += params
     print(table)
-    print(f"Total Embeddings Params: {embedding_params}")
-    print(f"Total Trainable Params without embeddings: {total_params}")
-    print(f"Total Params: {total_params + embedding_params}")
+    print(f"Total Embeddings, Output Layer and Normalization Params: {misc_params}")
+    print(f"Total Trainable Params without Embeddings, Output Layer and Normalization: {total_params}")
+    print(f"Total Params: {total_params + misc_params}")
     return total_params
 
 
